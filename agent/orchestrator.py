@@ -28,9 +28,8 @@ async def run(prompt: str, session_id: str = "default"):
     summary = get_summary(session_id)
     tools = registry.list_tools()
 
-
     all_history = get_history(session_id, limit=100)
-    if len(all_history) % 10 == 0 and all_history:
+    if len(all_history) > 0 and len(all_history) % 10 == 0:
         new_summary = await generate(f"Summarize this conversation:\n{all_history}")
         save_summary(session_id, new_summary)
 
@@ -38,7 +37,7 @@ async def run(prompt: str, session_id: str = "default"):
     current_time_str = now.strftime("%Y-%m-%d %H:%M")
     current_time_readable = now.strftime("%A, %B %d %Y at %I:%M %p")
 
-    system_prompt = f"""You are a helpful AI assistant with access to tools.
+    system_prompt = f"""You are a helpful AI productivity assistant called Agent Orchestration Platform.
 
 Current date and time: {current_time_readable} (use format YYYY-MM-DD HH:MM for reminder tools, e.g. {current_time_str})
 
@@ -64,19 +63,34 @@ Otherwise respond ONLY with valid JSON:
   "response": "your answer"
 }}
 
-Rules:
-- Never call the same tool twice.
+STRICT RULES:
+- NEVER say you did something unless you actually called the tool and got a result back.
+- NEVER assume a tool was already called. If the user asks you to do something, call the tool — do not say it was done in a previous turn unless you can see the tool result in this conversation.
+- If user asks to complete/delete/update something, you MUST call the appropriate tool. Do not respond with chat until the tool has been called and returned a result.
+- If the user refers to a todo/note/reminder by name or says "it" or "that one" and you don't have its ID, call list_todos/get_notes/list_reminders FIRST to find the ID, then call the action tool.
+- If the user asks to add multiple items (e.g. "add 3 todos"), call bulk_add_todos with all items in one call.
 - Only use tools from the provided list.
-- Always respond in JSON.
+- Always respond in valid JSON.
 - When user says "in X minutes/hours", calculate the exact datetime using the current time above.
+- If the user's request is ambiguous (e.g. "add a todo" with no details), ask for clarification via chat action.
+
+RESPONSE STYLE:
+- Respond like a smart, concise assistant — not like a debug log.
+- BAD: "Todo with ID 5 has been marked as complete."
+- GOOD: "Done — marked that as complete."
+- BAD: "Note 'Project Goals' has been saved with the body 'Build a production ready AI agent platform'. The note's ID is 1."
+- GOOD: "Saved your Project Goals note."
+- Keep confirmations short. Mention IDs only when the user needs them for follow-up actions.
+- For lists (todos, notes, reminders), format them clearly and concisely.
+- Never expose raw database fields or internal IDs unless asked.
 """
 
     current_prompt = system_prompt + f"\nUser: {prompt}"
-    max_steps = 3
-    used_tools = set()
+    max_steps = 8
+    tool_call_count = {}
 
     for step in range(max_steps):
-        response = await generate(current_prompt)
+        response = await generate(current_prompt, json_mode=True)
         decision = extract_json(response)
 
         if not decision:
@@ -87,17 +101,22 @@ Rules:
             tool_name = decision.get("tool_name")
             params = decision.get("params", {})
 
-            if not tool_name or tool_name in used_tools:
+            if not tool_name:
                 break
 
-            used_tools.add(tool_name)
+            count = tool_call_count.get(tool_name, 0)
+            if count >= 10:
+                break
+
+            tool_call_count[tool_name] = count + 1
             result = await registry.execute(tool_name, params)
 
             current_prompt += f"""
 Tool: {tool_name}
 Result: {json.dumps(result, indent=2)}
 
-Now answer the user using this result.
+If there are more actions needed to fully complete the user's request, continue with the next tool call.
+Otherwise respond with a chat action summarizing what was done.
 """
             continue
 

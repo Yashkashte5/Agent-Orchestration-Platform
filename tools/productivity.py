@@ -5,18 +5,23 @@ import httpx
 from datetime import datetime, timedelta
 from apscheduler.schedulers.background import BackgroundScheduler
 from llm.groq_client import generate
-from dotenv import load_dotenv
 
-load_dotenv()
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
 
 DB_PATH = "memory.db"
 SLACK_WEBHOOK_URL = os.getenv("SLACK_WEBHOOK_URL", "")
 
+# ─────────────────────────────────────────
+# SLACK
+# ─────────────────────────────────────────
 
 def _send_slack(message: str, blocks: list = None) -> bool:
-    """Send a message to Slack via webhook. Returns True if successful."""
     if not SLACK_WEBHOOK_URL:
-        print(f"⚠️  SLACK_WEBHOOK_URL not set. Reminder: {message}")
+        print(f"SLACK_WEBHOOK_URL not set. Reminder: {message}")
         return False
     try:
         payload = {"text": message}
@@ -30,28 +35,19 @@ def _send_slack(message: str, blocks: list = None) -> bool:
 
 
 def _build_reminder_blocks(reminder_id: int, message: str) -> list:
-    """Build a rich Slack Block Kit message for a reminder."""
     now = datetime.now().strftime("%I:%M %p")
     return [
-        {
-            "type": "section",
-            "text": {
-                "type": "mrkdwn",
-                "text": f"🔔 *Reminder*\n{message}"
-            }
-        },
-        {
-            "type": "context",
-            "elements": [
-                {
-                    "type": "mrkdwn",
-                    "text": f"⏰ Fired at {now}  |  ID: `{reminder_id}`"
-                }
-            ]
-        },
+        {"type": "section", "text": {"type": "mrkdwn", "text": f"*Reminder*\n{message}"}},
+        {"type": "context", "elements": [{"type": "mrkdwn", "text": f"Fired at {now}  |  ID: `{reminder_id}`"}]},
         {"type": "divider"}
     ]
 
+
+
+DB_PATH = "memory.db"
+
+# ─────────────────────────────────────────
+# SCHEDULER SETUP
 # ─────────────────────────────────────────
 
 scheduler = BackgroundScheduler()
@@ -59,18 +55,13 @@ scheduler = BackgroundScheduler()
 
 def _fire_reminder(reminder_id: int, message: str):
     """Called by scheduler when a reminder is due. Sends Slack notification."""
-
     blocks = _build_reminder_blocks(reminder_id, message)
-    slack_sent = _send_slack(f"🔔 Reminder: {message}", blocks=blocks)
-
-
-    status = "✅ Slack sent" if slack_sent else "⚠️  Slack failed"
-    print(f"\n🔔 REMINDER [{reminder_id}]: {message} | {status}\n")
+    slack_sent = _send_slack(f"Reminder: {message}", blocks=blocks)
+    status = "Slack sent" if slack_sent else "Slack failed"
+    print(f"\nREMINDER [{reminder_id}]: {message} | {status}\n")
 
     conn = sqlite3.connect(DB_PATH)
     cur = conn.cursor()
-
-
     cur.execute("SELECT recurrence FROM reminders WHERE id=?", (reminder_id,))
     row = cur.fetchone()
     recurrence = row[0] if row else "none"
@@ -80,25 +71,15 @@ def _fire_reminder(reminder_id: int, message: str):
         cur.execute("UPDATE reminders SET remind_at=? WHERE id=?", (next_time.isoformat(), reminder_id))
         conn.commit()
         conn.close()
-        scheduler.add_job(
-            _fire_reminder, "date",
-            run_date=next_time,
-            args=[reminder_id, message],
-            id=f"reminder_{reminder_id}",
-            replace_existing=True,
-        )
+        scheduler.add_job(_fire_reminder, "date", run_date=next_time,
+            args=[reminder_id, message], id=f"reminder_{reminder_id}", replace_existing=True)
     elif recurrence == "weekly":
         next_time = datetime.utcnow() + timedelta(weeks=1)
         cur.execute("UPDATE reminders SET remind_at=? WHERE id=?", (next_time.isoformat(), reminder_id))
         conn.commit()
         conn.close()
-        scheduler.add_job(
-            _fire_reminder, "date",
-            run_date=next_time,
-            args=[reminder_id, message],
-            id=f"reminder_{reminder_id}",
-            replace_existing=True,
-        )
+        scheduler.add_job(_fire_reminder, "date", run_date=next_time,
+            args=[reminder_id, message], id=f"reminder_{reminder_id}", replace_existing=True)
     else:
         cur.execute("UPDATE reminders SET done=1 WHERE id=?", (reminder_id,))
         conn.commit()
@@ -137,6 +118,9 @@ def _reload_pending_reminders():
             print(f"Could not reschedule reminder {rid}: {e}")
 
 
+# ─────────────────────────────────────────
+# DB INIT
+# ─────────────────────────────────────────
 
 def init_productivity_db():
     conn = sqlite3.connect(DB_PATH)
@@ -179,7 +163,9 @@ def init_productivity_db():
     conn.close()
 
 
-# ─────────────────────────────────────────TODOS─────────────────────────────────────────────────────────────────────────────────
+# ─────────────────────────────────────────
+# TODOS
+# ─────────────────────────────────────────
 
 PRIORITY_ORDER = {"high": 0, "normal": 1, "low": 2}
 
@@ -202,6 +188,33 @@ def add_todo(task: str, priority: str = "normal", due_date: str = "") -> dict:
     if due_date:
         msg += f" | due: {due_date}"
     return {"success": True, "message": msg, "id": todo_id}
+
+
+def bulk_add_todos(tasks: list) -> dict:
+    """
+    Add multiple todos at once.
+    tasks: list of strings or dicts with keys: task, priority (optional), due_date (optional)
+    """
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+    added = []
+    for item in tasks:
+        if isinstance(item, str):
+            task, priority, due_date = item, "normal", None
+        else:
+            task = item.get("task", "")
+            priority = item.get("priority", "normal")
+            due_date = item.get("due_date", None) or None
+        if not task:
+            continue
+        cur.execute(
+            "INSERT INTO todos (task, priority, due_date, created_at) VALUES (?, ?, ?, ?)",
+            (task, priority, due_date, datetime.utcnow().isoformat()),
+        )
+        added.append({"id": cur.lastrowid, "task": task, "priority": priority})
+    conn.commit()
+    conn.close()
+    return {"success": True, "message": f"Added {len(added)} todos", "todos": added}
 
 
 def list_todos() -> dict:
@@ -277,7 +290,9 @@ def delete_todo(todo_id: int) -> dict:
     return {"success": True, "message": f"Todo {todo_id} deleted"}
 
 
-# ─────────────────────────────────────────NOTES─────────────────────────────────────────────────────────────────────────────────
+# ─────────────────────────────────────────
+# NOTES
+# ─────────────────────────────────────────
 
 async def add_note(title: str, body: str, tags: str = "") -> dict:
     """
@@ -382,8 +397,9 @@ def delete_note(note_id: int) -> dict:
     return {"success": True, "message": f"Note {note_id} deleted"}
 
 
-# ─────────────────────────────────────────REMINDERS─────────────────────────────────────────────────────────────────────────────────
-
+# ─────────────────────────────────────────
+# REMINDERS
+# ─────────────────────────────────────────
 
 def set_reminder(message: str, remind_at: str, recurrence: str = "none") -> dict:
     """
@@ -504,88 +520,9 @@ def delete_reminder(reminder_id: int) -> dict:
     return {"success": True, "message": f"Reminder {reminder_id} deleted"}
 
 
-# ─────────────────────────────────────────SLACK TOOLS─────────────────────────────────────────────────────────────────────────────────
-
-
-def send_slack_message(message: str) -> dict:
-    """Send a custom message to Slack. Use for important updates or when user asks to notify via Slack."""
-    if not SLACK_WEBHOOK_URL:
-        return {"success": False, "message": "SLACK_WEBHOOK_URL not configured in .env"}
-    blocks = [
-        {
-            "type": "section",
-            "text": {"type": "mrkdwn", "text": f"💬 {message}"}
-        },
-        {
-            "type": "context",
-            "elements": [{"type": "mrkdwn", "text": f"Sent via Agent · {datetime.now().strftime('%b %d, %I:%M %p')}"}]
-        }
-    ]
-    sent = _send_slack(message, blocks=blocks)
-    if sent:
-        return {"success": True, "message": "Message sent to Slack"}
-    return {"success": False, "message": "Failed to send Slack message. Check your webhook URL."}
-
-
-def send_slack_daily_summary() -> dict:
-    """Push your daily summary (todos + reminders + notes) directly to Slack."""
-    summary = get_daily_summary()
-    if not summary["success"]:
-        return {"success": False, "message": "Could not fetch daily summary"}
-
-    d = summary["daily_summary"]
-    todos = d["todos"]
-    reminders = d["upcoming_reminders"]
-    notes = d["recent_notes"]
-
-
-    blocks = [
-        {"type": "header", "text": {"type": "plain_text", "text": f"📋 Daily Summary · {datetime.now().strftime('%b %d, %Y')}"}},
-        {"type": "divider"},
-    ]
-
-
-    if todos:
-        todo_lines = []
-        for t in todos[:8]:  # cap at 8
-            icon = "🔴" if t["overdue"] else ("🟠" if t["priority"] == "high" else "🔵")
-            due = f" _(due {t['due_date']})_" if t["due_date"] != "none" else ""
-            todo_lines.append(f"{icon} {t['task']}{due}")
-        blocks.append({
-            "type": "section",
-            "text": {"type": "mrkdwn", "text": f"*Todos ({len(todos)} pending, {d['overdue_todos']} overdue)*\n" + "\n".join(todo_lines)}
-        })
-    else:
-        blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": "*Todos* ✅ All clear!"}})
-
-    blocks.append({"type": "divider"})
-
-    if reminders:
-        rem_lines = [f"⏰ {r['message']} · _{r['remind_at']}_" for r in reminders[:5]]
-        blocks.append({
-            "type": "section",
-            "text": {"type": "mrkdwn", "text": "*Upcoming Reminders*\n" + "\n".join(rem_lines)}
-        })
-    else:
-        blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": "*Reminders* ✅ Nothing scheduled"}})
-
-    blocks.append({"type": "divider"})
-
-    # Notes section
-    if notes:
-        note_lines = [f"📝 *{n['title']}*" + (f" — {n['summary'][:80]}..." if n['summary'] else "") for n in notes[:3]]
-        blocks.append({
-            "type": "section",
-            "text": {"type": "mrkdwn", "text": "*Recent Notes*\n" + "\n".join(note_lines)}
-        })
-
-    sent = _send_slack("📋 Your Daily Summary", blocks=blocks)
-    if sent:
-        return {"success": True, "message": "Daily summary sent to Slack"}
-    return {"success": False, "message": "Failed to send to Slack. Check SLACK_WEBHOOK_URL in .env"}
-
-
-# ───────────────────────────────────────── Cross Tools ────────────────────────────────────────────────────────────────────────────────────────────────
+# ─────────────────────────────────────────
+# CROSS-TOOL
+# ─────────────────────────────────────────
 
 def get_daily_summary() -> dict:
     """One call: pending todos with overdue flags, upcoming reminders, recent notes."""
@@ -634,3 +571,69 @@ def clear_completed() -> dict:
         "success": True,
         "message": f"Cleared {todos_deleted} completed todos and {reminders_deleted} fired reminders",
     }
+
+# ─────────────────────────────────────────
+# SLACK TOOLS
+# ─────────────────────────────────────────
+
+def send_slack_message(message: str) -> dict:
+    """Send a custom message to Slack."""
+    if not SLACK_WEBHOOK_URL:
+        return {"success": False, "message": "SLACK_WEBHOOK_URL not configured in .env"}
+    blocks = [
+        {"type": "section", "text": {"type": "mrkdwn", "text": message}},
+        {"type": "context", "elements": [{"type": "mrkdwn", "text": f"Sent via Agent · {datetime.now().strftime('%b %d, %I:%M %p')}"}]}
+    ]
+    sent = _send_slack(message, blocks=blocks)
+    if sent:
+        return {"success": True, "message": "Message sent to Slack"}
+    return {"success": False, "message": "Failed to send. Check SLACK_WEBHOOK_URL in .env"}
+
+
+def send_slack_daily_summary() -> dict:
+    """Push daily summary to Slack."""
+    summary = get_daily_summary()
+    if not summary["success"]:
+        return {"success": False, "message": "Could not fetch daily summary"}
+
+    d = summary["daily_summary"]
+    todos = d["todos"]
+    reminders = d["upcoming_reminders"]
+    notes = d["recent_notes"]
+
+    blocks = [
+        {"type": "header", "text": {"type": "plain_text", "text": f"Daily Summary - {datetime.now().strftime('%b %d, %Y')}"}},
+        {"type": "divider"},
+    ]
+
+    if todos:
+        todo_lines = []
+        for t in todos[:8]:
+            tag = "[overdue]" if t["overdue"] else ("[high]" if t["priority"] == "high" else "-")
+            due = f" (due {t['due_date']})" if t["due_date"] != "none" else ""
+            todo_lines.append(f"{tag} {t['task']}{due}")
+        blocks.append({"type": "section", "text": {"type": "mrkdwn",
+            "text": f"*Todos ({len(todos)} pending, {d['overdue_todos']} overdue)*\n" + "\n".join(todo_lines)}})
+    else:
+        blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": "*Todos* All clear!"}})
+
+    blocks.append({"type": "divider"})
+
+    if reminders:
+        rem_lines = [f"{r['message']} - {r['remind_at']}" for r in reminders[:5]]
+        blocks.append({"type": "section", "text": {"type": "mrkdwn",
+            "text": "*Upcoming Reminders*\n" + "\n".join(rem_lines)}})
+    else:
+        blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": "*Reminders* Nothing scheduled"}})
+
+    blocks.append({"type": "divider"})
+
+    if notes:
+        note_lines = [f"*{n['title']}*" + (f" - {n['summary'][:80]}" if n['summary'] else "") for n in notes[:3]]
+        blocks.append({"type": "section", "text": {"type": "mrkdwn",
+            "text": "*Recent Notes*\n" + "\n".join(note_lines)}})
+
+    sent = _send_slack("Your Daily Summary", blocks=blocks)
+    if sent:
+        return {"success": True, "message": "Daily summary sent to Slack"}
+    return {"success": False, "message": "Failed to send. Check SLACK_WEBHOOK_URL in .env"}

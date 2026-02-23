@@ -1,16 +1,19 @@
 from fastapi import FastAPI
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
 from api.routes import router
 from memory import init_db
 from tools.registry import registry
 from tools.summarizer import summarize_text
 from tools.productivity import (
     init_productivity_db, start_scheduler,
-    add_todo, list_todos, complete_todo, bulk_complete_todos, delete_todo,
+    add_todo, bulk_add_todos, list_todos, complete_todo, bulk_complete_todos, delete_todo,
     add_note, get_notes, update_note, delete_note,
     set_reminder, list_reminders, snooze_reminder, delete_reminder,
     get_daily_summary, clear_completed,
     send_slack_message, send_slack_daily_summary,
 )
+import os
 
 app = FastAPI(title="AI Agent Platform")
 
@@ -29,9 +32,15 @@ registry.register(
 # ── Todos ──────────────────────────────────────────────
 registry.register(
     name="add_todo",
-    description="Add a new todo task with optional priority (low/normal/high) and due date (YYYY-MM-DD)",
+    description="Add a single todo task with optional priority (low/normal/high) and due date (YYYY-MM-DD)",
     func=add_todo,
     schema={"task": "string", "priority": "string (optional)", "due_date": "string YYYY-MM-DD (optional)"},
+)
+registry.register(
+    name="bulk_add_todos",
+    description="Add multiple todos at once. Use when user asks to add 2 or more todos in one message. tasks: list of strings or objects with task/priority/due_date fields.",
+    func=bulk_add_todos,
+    schema={"tasks": "list of strings or objects with task, priority, due_date fields"},
 )
 registry.register(
     name="list_todos",
@@ -127,13 +136,13 @@ registry.register(
 # ── Slack ──────────────────────────────────────────────
 registry.register(
     name="send_slack_message",
-    description="Send a custom message to the user's Slack. Use when user says 'notify me on Slack', 'send to Slack', or wants to push an important update.",
+    description="Send a custom message to Slack. Use when user says notify me on Slack or wants to push an update.",
     func=send_slack_message,
     schema={"message": "string"},
 )
 registry.register(
     name="send_slack_daily_summary",
-    description="Push the full daily summary (todos, reminders, notes) to Slack as a rich formatted message. Use when user asks to send their summary to Slack.",
+    description="Push the full daily summary to Slack as a rich formatted message.",
     func=send_slack_daily_summary,
     schema={},
 )
@@ -143,3 +152,16 @@ app.include_router(router)
 @app.get("/health")
 async def health():
     return {"status": "ok"}
+
+# Serve React frontend
+static_dir = os.path.join(os.path.dirname(__file__), "static")
+if os.path.exists(static_dir):
+    app.mount("/assets", StaticFiles(directory=os.path.join(static_dir, "assets")), name="assets")
+
+    @app.get("/")
+    async def serve_frontend():
+        return FileResponse(os.path.join(static_dir, "index.html"))
+
+    @app.get("/{full_path:path}")
+    async def serve_spa(full_path: str):
+        return FileResponse(os.path.join(static_dir, "index.html"))

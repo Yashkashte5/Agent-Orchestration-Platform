@@ -8,7 +8,7 @@ GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 GROQ_MODEL = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
 
 
-async def generate(prompt: str) -> str:
+async def generate(prompt: str, json_mode: bool = False) -> str:
     headers = {
         "Authorization": f"Bearer {GROQ_API_KEY}",
         "Content-Type": "application/json",
@@ -18,6 +18,9 @@ async def generate(prompt: str) -> str:
         "model": GROQ_MODEL,
         "messages": [{"role": "user", "content": prompt}],
     }
+
+    if json_mode:
+        payload["response_format"] = {"type": "json_object"}
 
     async with httpx.AsyncClient(timeout=30) as client:
         response = await client.post(
