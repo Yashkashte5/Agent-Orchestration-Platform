@@ -2,3 +2,5 @@
 memory.db
 logs/
 __pycache__/
+credentials.json
+google_token.json

@@ -1,10 +1,18 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import styles from './Sidebar.module.css'
 
 export default function Sidebar({ chats, activeId, onNew, onSwitch, onRename, onDelete }) {
   const [search, setSearch] = useState('')
   const [renamingId, setRenamingId] = useState(null)
   const [renameVal, setRenameVal] = useState('')
+  const [googleConnected, setGoogleConnected] = useState(false)
+
+  useEffect(() => {
+    fetch('/auth/status')
+      .then(r => r.json())
+      .then(d => setGoogleConnected(d.connected))
+      .catch(() => {})
+  }, [])
 
   const filtered = chats.filter(c =>
     !search || c.name.toLowerCase().includes(search.toLowerCase())
@@ -118,6 +126,25 @@ export default function Sidebar({ chats, activeId, onNew, onSwitch, onRename, on
             </div>
           ))}
         </div>
+      </div>
+
+      {/* Google Connect */}
+      <div className={styles.googleWrap}>
+        {googleConnected ? (
+          <div className={styles.googleConnected}>
+            <span className={styles.googleDot} />
+            Google connected
+          </div>
+        ) : (
+          <a href="/auth/google" className={styles.googleBtn}>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"/>
+              <polyline points="10 17 15 12 10 7"/>
+              <line x1="15" y1="12" x2="3" y2="12"/>
+            </svg>
+            Connect Google
+          </a>
+        )}
       </div>
     </aside>
   )

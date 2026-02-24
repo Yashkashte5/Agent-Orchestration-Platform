@@ -22,67 +22,54 @@ def extract_json(text: str):
 
 
 async def run(prompt: str, session_id: str = "default"):
-    save_message(session_id, "user", prompt)
-
-    history = get_history(session_id)
+    # Fetch history BEFORE saving current message to avoid duplication in prompt
+    history = get_history(session_id, limit=6)
     summary = get_summary(session_id)
     tools = registry.list_tools()
 
+    # Save current message after fetching history
+    save_message(session_id, "user", prompt)
+
+    # Summarize every 20 messages instead of 10
     all_history = get_history(session_id, limit=100)
-    if len(all_history) > 0 and len(all_history) % 10 == 0:
-        new_summary = await generate(f"Summarize this conversation:\n{all_history}")
+    if len(all_history) > 0 and len(all_history) % 20 == 0:
+        new_summary = await generate(f"Summarize this conversation in 3 sentences max:\n{all_history}")
         save_summary(session_id, new_summary)
 
     now = datetime.now()
     current_time_str = now.strftime("%Y-%m-%d %H:%M")
     current_time_readable = now.strftime("%A, %B %d %Y at %I:%M %p")
 
-    system_prompt = f"""You are a helpful AI productivity assistant called Agent Orchestration Platform.
+    # Compact tool list — name + description + exact param names
+    compact_tools = [
+        {"name": t["name"], "desc": t["description"], "params": t.get("params", {})}
+        for t in tools
+    ]
 
-Current date and time: {current_time_readable} (use format YYYY-MM-DD HH:MM for reminder tools, e.g. {current_time_str})
+    system_prompt = f"""You are a concise AI productivity assistant called Agent Orchestration Platform.
+Current time: {current_time_readable} (reminder format: {current_time_str})
 
-Conversation summary:
-{summary}
+Summary: {summary or "None"}
 
 Recent conversation:
 {json.dumps(history, indent=2)}
 
-Available tools:
-{json.dumps(tools, indent=2)}
+Tools:
+{json.dumps(compact_tools, indent=2)}
 
-If a tool is needed respond ONLY with valid JSON:
-{{
-  "action": "tool",
-  "tool_name": "...",
-  "params": {{}}
-}}
+Respond ONLY with valid JSON:
+Tool call: {{"action":"tool","tool_name":"...","params":{{}}}}
+Chat reply: {{"action":"chat","response":"..."}}
 
-Otherwise respond ONLY with valid JSON:
-{{
-  "action": "chat",
-  "response": "your answer"
-}}
+RULES:
+- Never claim to do something without calling the tool first.
+- If you need an ID (complete/delete/update), call list_todos/get_notes/list_reminders first, then immediately act — no chat in between.
+- For multiple items, use bulk_add_todos.
+- For ambiguous requests, ask for clarification.
+- Always use tools — never answer from memory when a tool exists.
+- remind_at format: YYYY-MM-DD HH:MM
 
-STRICT RULES:
-- NEVER say you did something unless you actually called the tool and got a result back.
-- NEVER assume a tool was already called. If the user asks you to do something, call the tool — do not say it was done in a previous turn unless you can see the tool result in this conversation.
-- If user asks to complete/delete/update something, you MUST call the appropriate tool. Do not respond with chat until the tool has been called and returned a result.
-- If the user refers to a todo/note/reminder by name or says "it" or "that one" and you don't have its ID, call list_todos/get_notes/list_reminders FIRST to find the ID, then call the action tool.
-- If the user asks to add multiple items (e.g. "add 3 todos"), call bulk_add_todos with all items in one call.
-- Only use tools from the provided list.
-- Always respond in valid JSON.
-- When user says "in X minutes/hours", calculate the exact datetime using the current time above.
-- If the user's request is ambiguous (e.g. "add a todo" with no details), ask for clarification via chat action.
-
-RESPONSE STYLE:
-- Respond like a smart, concise assistant — not like a debug log.
-- BAD: "Todo with ID 5 has been marked as complete."
-- GOOD: "Done — marked that as complete."
-- BAD: "Note 'Project Goals' has been saved with the body 'Build a production ready AI agent platform'. The note's ID is 1."
-- GOOD: "Saved your Project Goals note."
-- Keep confirmations short. Mention IDs only when the user needs them for follow-up actions.
-- For lists (todos, notes, reminders), format them clearly and concisely.
-- Never expose raw database fields or internal IDs unless asked.
+STYLE: Be concise. "Done — marked complete." not "Todo with ID 5 has been marked as complete."
 """
 
     current_prompt = system_prompt + f"\nUser: {prompt}"
@@ -104,6 +91,7 @@ RESPONSE STYLE:
             if not tool_name:
                 break
 
+            # Allow same tool up to 10 times (for bulk operations)
             count = tool_call_count.get(tool_name, 0)
             if count >= 10:
                 break
@@ -115,8 +103,8 @@ RESPONSE STYLE:
 Tool: {tool_name}
 Result: {json.dumps(result, indent=2)}
 
-If there are more actions needed to fully complete the user's request, continue with the next tool call.
-Otherwise respond with a chat action summarizing what was done.
+If this was a list result (list_todos, get_notes, list_reminders) and the user asked to complete/delete/update an item, extract the correct ID from the result above and IMMEDIATELY call the appropriate action tool next. Do not respond with chat yet.
+If the task is fully complete, respond with a chat action summarizing what was done.
 """
             continue
 
