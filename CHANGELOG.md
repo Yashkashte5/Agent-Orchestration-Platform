@@ -26,7 +26,6 @@ All notable changes to this project are documented in this file.
   - `/auth/status`
 
 ### Changed
-- Project identity and app title updated to **Agent Orchestration Platform**.
 - Orchestrator prompt rules tightened for reliable list->ID->action flows (especially complete/delete/update flows).
 - Orchestrator step budget increased to support multi-action requests.
 - LLM client updated to support JSON response mode (`response_format: json_object`).
