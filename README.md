@@ -137,11 +137,4 @@ Current release: `v1.0.0` (see `CHANGELOG.md`).
 
 This v1 is platform-first: orchestration + memory core, with productivity and Google integrations as the first tool domain.
 
-## Security Notes
 
-- Keep `.env`, `credentials.json`, and `google_token.json` out of version control.
-- Rotate tokens/keys immediately if committed by mistake.
-
-## License
-
-Add your preferred license in a `LICENSE` file.
